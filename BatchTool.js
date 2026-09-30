@@ -1,7 +1,8 @@
-/* * MediaWiki 批量管理工具 v20.4
- * 原始开发：Claude & Gemini & ChatGPT & DeepSeek & Doubao
+/* =========================================================
+ * MediaWiki 批量管理工具
+ * 原始开发：Claude & Gemini
  * 发布者：PandaFiredoge
-*/
+ * ========================================================= */
 
 (function () {
     'use strict';
@@ -16,13 +17,11 @@
         btnCreated: false,
         resizeBound: false,
         lastHiddenMode: 'closed',
-        // [BUG-05] FAB 位置保存/恢复
         _fabOrigLeft: null,
         _fabOrigTop: null,
         _fabOrigRight: null,
         _fabOrigBottom: null,
         _fabWasMoved: false,
-        // [BUG-10] 守护重入标志
         _guardRunning: false
     };
 
@@ -44,7 +43,7 @@
         createModalContainer();
         bindUnloadProtector();
 
-        // [BUG-10] 守护悬浮球，添加重入保护标志，防止并发重建
+        // 守护悬浮球，添加重入保护标志，防止并发重建
         setInterval(() => {
             if (State._guardRunning) return;
             if (!document.getElementById('mw-batch-tool-btn')) {
@@ -55,7 +54,7 @@
             }
         }, 2000);
 
-        console.log('MediaWiki 批量管理工具 v20.4 已启动');
+        console.log('MediaWiki 批量管理工具 v20.5 已启动');
     }
 
     function bindUnloadProtector() {
@@ -77,7 +76,7 @@
         return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
-    // [BUG-02][BUG-03] 可中断式 sleep：每 100ms 检查一次 stopSignal
+    // 可中断式 sleep：每 100ms 检查一次 stopSignal
     async function sleepWithStop(ms) {
         const end = Date.now() + ms;
         while (Date.now() < end) {
@@ -86,12 +85,30 @@
         }
     }
 
-    // [BUG-01] 动态获取当前 wiki 的模板命名空间所有别名（ID=10）
+    // 动态获取当前 wiki 的模板命名空间所有别名（ID=10）
     function getTemplateNamespacePrefixes() {
         const nsIds = mw.config.get('wgNamespaceIds');
         return Object.keys(nsIds)
             .filter(k => nsIds[k] === 10)
             .map(k => k.toLowerCase().replace(/_/g, ' '));
+    }
+
+    // [BUG-12] 查询单页面创建者（首个修订的作者）。严格单页查询，规避 multpages-incompatible
+    async function getPageCreator(title) {
+        try {
+            const res = await mwApiPost({ action: 'query', titles: title, prop: 'revisions', rvprop: 'user', rvlimit: 1, rvdir: 'newer' });
+            const page = Object.values(res?.query?.pages || {})[0];
+            if (!page || page.missing !== undefined || page.invalid !== undefined) return false;
+            return page.revisions?.[0]?.user ?? null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    // 用户名比较：忽略大小写与下划线/空格差异
+    function isSameUser(a, b) {
+        const norm = s => String(s || '').replace(/_/g, ' ').trim().toLowerCase();
+        return norm(a) === norm(b);
     }
 
     // =========================================================
@@ -242,7 +259,6 @@ html.skin-theme-clientpref-night { ${darkVars} }
         updateDynamicIsland(State.isRunning, pct, text);
     }
 
-    // [BUG-05] 修复：任务期间强制移动悬浮球位置后，任务结束可恢复原始位置
     function updateDynamicIsland(isActive, pct = 0, text = '') {
         const fab = document.getElementById('mw-batch-tool-btn');
         if (!fab) return;
@@ -255,7 +271,6 @@ html.skin-theme-clientpref-night { ${darkVars} }
                 fab.classList.add('is-expanded');
                 const rect = fab.getBoundingClientRect();
                 if (rect.left > window.innerWidth - 220) {
-                    // 仅首次移动时保存原始位置
                     if (!State._fabWasMoved) {
                         State._fabOrigLeft   = fab.style.left;
                         State._fabOrigTop    = fab.style.top;
@@ -277,7 +292,6 @@ html.skin-theme-clientpref-night { ${darkVars} }
             if (fabBar) fabBar.style.width = pct + '%';
         } else {
             fab.classList.remove('is-expanded');
-            // 恢复被程序修改的悬浮球原始位置
             if (State._fabWasMoved) {
                 fab.style.left   = State._fabOrigLeft;
                 fab.style.top    = State._fabOrigTop;
@@ -362,7 +376,6 @@ html.skin-theme-clientpref-night { ${darkVars} }
             if (!isDragging) toggleWindow();
             else {
                 try { localStorage.setItem('mw-batch-btn-pos', JSON.stringify({ left: btn.style.left, top: btn.style.top })); } catch (e) { }
-                // [BUG-05] 用户手动拖拽后重置保存的原始位置（以新位置为基准）
                 if (State._fabWasMoved) {
                     State._fabOrigLeft   = btn.style.left;
                     State._fabOrigTop    = btn.style.top;
@@ -530,11 +543,10 @@ html.skin-theme-clientpref-night { ${darkVars} }
         });
     }
 
-    // [BUG-02] 修复：在循环内检查 stopSignal，长时间拉取可被中断
     async function apiQueryAll(params, mapFn) {
         let resArr = [], cont = {}, iter = 0, lastContStr = '';
         while (iter++ < 3000) {
-            if (State.stopSignal) break; // [BUG-02] 检查停止信号
+            if (State.stopSignal) break;
             try {
                 const reqParams = Object.assign({ action: 'query' }, params);
                 Object.keys(cont).forEach(k => { reqParams[k] = cont[k]; });
@@ -550,7 +562,7 @@ html.skin-theme-clientpref-night { ${darkVars} }
             } catch (e) {
                 if (e.code === 'maxlag' || e.code === 'ratelimited') {
                     console.warn(`[Batch Tool] apiQueryAll 命中限速 (${e.code})，等待 5 秒...`);
-                    await sleepWithStop(5000); // [BUG-02] 限速等待也可中断
+                    await sleepWithStop(5000);
                     if (State.stopSignal) break;
                     iter--;
                     continue;
@@ -600,7 +612,7 @@ html.skin-theme-clientpref-night { ${darkVars} }
 
         win.innerHTML = `
 <div class="tool-header" id="mw-tool-drag-handle">
-    <div class="tool-header-title"><span class="tool-header-icon">🔨</span>批量管理工具<span class="tool-header-ver">v20.4 Fixed</span></div>
+    <div class="tool-header-title"><span class="tool-header-icon">🔨</span>批量管理工具<span class="tool-header-ver">v20.5 Pro</span></div>
     <div class="tool-header-controls">
         <div class="tool-ctrl-btn" id="mw-batch-tool-min" title="最小化到悬浮球">─</div>
         <div class="tool-ctrl-btn close-btn" id="mw-batch-tool-close" title="强行关闭">✕</div>
@@ -743,14 +755,13 @@ html.skin-theme-clientpref-night { ${darkVars} }
         handle.onmousedown = onDown; handle.addEventListener('touchstart', onDown, { passive: false });
     }
 
-    // [BUG-06] 修复：拖拽调整窗口大小时同步更新 tab 指示器位置
     function makeResizable(win) {
         const resizer = win.querySelector('.fluent-resizer');
         let startX, startY, startWidth, startHeight;
         const onMove = (e) => {
             win.style.width  = Math.max(480, startWidth  + ((e.clientX ?? e.touches[0].clientX) - startX)) + 'px';
             win.style.height = Math.max(400, startHeight + ((e.clientY ?? e.touches[0].clientY) - startY)) + 'px';
-            updateTabIndicator(currentTabIdx); // [BUG-06]
+            updateTabIndicator(currentTabIdx);
         };
         const onUp = () => {
             document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp);
@@ -782,7 +793,6 @@ html.skin-theme-clientpref-night { ${darkVars} }
         return text.replace(/\x00BLOCK(\d+)\x00/g, (_, i) => masks[parseInt(i)]);
     }
 
-    // [BUG-01] 修复：动态检测模板命名空间别名，兼容所有语言的 wiki
     function removeWikitextTemplateSafe(text, tmplName) {
         const { masked, masks } = maskWikitextBlocks(text);
         let result = masked;
@@ -835,9 +845,7 @@ html.skin-theme-clientpref-night { ${darkVars} }
         document.getElementById('btn-import-user').onclick  = () => customPrompt('贡献导入', '用户名 (一行一个):', async (v) => appendPages(await smartImport('usercontribs', { ucuser: v })), true);
         document.getElementById('btn-import-recent').onclick = async () => appendPages(await smartImport('recentchanges', {}));
 
-        // [BUG-09] 修复：分离正则语法错误与网络异常的处理逻辑
         document.getElementById('btn-import-regex').onclick = () => customPrompt('全站搜索', '输入正则', async (v) => {
-            // 先独立校验正则，给出明确的语法错误提示
             let rx;
             try {
                 rx = new RegExp(v, 'i');
@@ -876,7 +884,7 @@ html.skin-theme-clientpref-night { ${darkVars} }
                             cont = res.continue;
                         } catch (e) {
                             if (e.code === 'maxlag' || e.code === 'ratelimited') {
-                                await sleepWithStop(5000); // [BUG-03]
+                                await sleepWithStop(5000);
                                 if (State.stopSignal) break;
                                 nsIter--; continue;
                             }
@@ -886,7 +894,6 @@ html.skin-theme-clientpref-night { ${darkVars} }
                 }
                 if (!State.stopSignal) mw.notify(`扫描完成，共扫描 ${scanCount} 页，找到 ${matchCount} 个匹配。`);
             } catch (e) {
-                // [BUG-09] 此处只会捕获网络/API 异常
                 mw.notify(`扫描过程发生网络异常：${e.info || e.code || e.message || '未知错误'}`, { type: 'error' });
             } finally {
                 setTaskState(false);
@@ -947,7 +954,6 @@ html.skin-theme-clientpref-night { ${darkVars} }
             startBatchProcess(expandList(list), async (t) => await mwApiPostWithToken('csrf', Object.assign({ action: 'undelete', title: t, reason: getReason() }, getBotParam('edit'))));
         };
 
-        // [FEAT-01] 修复：批量保护支持选择期限，不再硬编码 infinite
         document.getElementById('btn-batch-protect').onclick = () => {
             const list = getList(); if (!list.length) return;
             showProtectModal(list);
@@ -964,7 +970,6 @@ html.skin-theme-clientpref-night { ${darkVars} }
         document.getElementById('export-log-btn').onclick = exportLogReport;
     }
 
-    // [FEAT-01] 批量保护弹窗，支持自定义期限
     function showProtectModal(list) {
         const area = document.getElementById('modal-content-area');
         const expiryOptions = [
@@ -1006,22 +1011,26 @@ html.skin-theme-clientpref-night { ${darkVars} }
         };
     }
 
+    // =========================================================
+    //  破坏者联合清理防御（集成 RevDel + 严格单页核查 + IP防熔断）
+    // =========================================================
     function showDeepCleanupModal() {
         if (State.isRunning) return mw.notify('后台有任务正在运行或处于暂停状态，请先彻底停止再启动！', { type: 'error' });
         const area = document.getElementById('modal-content-area');
         area.innerHTML = `
-<div class="modal-title-text">⚠ 联合清理防御面板</div>
+<div class="modal-title-text">⚠ 破坏者联合清理防御面板</div>
 <label class="filter-label">目标用户/IP 名单（一行一个）</label>
-<textarea id="cleanup-users" class="tool-textarea" style="height:80px; margin-bottom:14px;"></textarea>
+<textarea id="cleanup-users" class="tool-textarea" style="height:75px; margin-bottom:12px;" placeholder="支持用户名或IP，自动剥离 User: 前缀..."></textarea>
 <div class="filter-section">
     <div style="display:flex; gap:10px; align-items:center; margin-bottom:10px; flex-wrap:wrap;">
-        <span style="font-size:12px; color:var(--fd-text-secondary);">封禁期限</span>
-        <select id="blk-expiry" class="tool-input" style="width:140px; margin-bottom:0;">
+        <label class="cleanup-option" style="margin-bottom:0; font-weight:600;"><input type="checkbox" id="blk-enable" checked> 执行封禁</label>
+        <span style="font-size:12px; color:var(--fd-text-secondary); margin-left:8px;">期限</span>
+        <select id="blk-expiry" class="tool-input" style="width:130px; margin-bottom:0;">
             <option value="infinite">永久 (infinite)</option><option value="1 day">1 天</option><option value="3 days">3 天</option>
             <option value="1 week">1 周</option><option value="2 weeks">2 周</option><option value="1 month">1 个月</option>
             <option value="3 months">3 个月</option><option value="6 months">6 个月</option><option value="1 year">1 年</option>
         </select>
-        <label class="cleanup-option" style="margin-bottom:0; color:var(--fd-error);"><input type="checkbox" id="blk-circuit-breaker" checked> 封禁失败熔断</label>
+        <label class="cleanup-option" style="margin-bottom:0; color:var(--fd-error);"><input type="checkbox" id="blk-circuit-breaker"> 封禁失败熔断</label>
     </div>
     <div style="display:flex; flex-wrap:wrap; gap:14px; margin-bottom:10px;">
         <label class="cleanup-option"><input type="checkbox" id="blk-autoblock" checked> 自动封禁(针对账号)</label>
@@ -1030,11 +1039,22 @@ html.skin-theme-clientpref-night { ${darkVars} }
         <label class="cleanup-option"><input type="checkbox" id="blk-notalk"> 禁讨论页</label>
     </div>
     <div class="fluent-divider"></div>
-    <label class="cleanup-option"><input type="checkbox" id="do-rollback" checked> <b>回退编辑 (Rollback)</b></label>
-    <div class="sub-option"><label class="cleanup-option" style="color:var(--fd-text-secondary);"><input type="checkbox" id="rb-markbot" checked> 标记机器人</label></div>
     <label class="cleanup-option"><input type="checkbox" id="do-undo-move" checked> <b>还原更名操作 (Undo Move)</b></label>
-    <label class="cleanup-option"><input type="checkbox" id="do-del-new" checked> <b>无条件删除新建页面</b></label>
-    <div class="sub-option"><label class="cleanup-option" style="color:var(--fd-text-secondary);"><input type="checkbox" id="del-sync-assoc"> 包含关联页</label></div>
+    <label class="cleanup-option"><input type="checkbox" id="do-rollback" checked> <b>回退所有贡献 (Rollback)</b></label>
+    <div class="sub-option"><label class="cleanup-option" style="color:var(--fd-text-secondary);"><input type="checkbox" id="rb-markbot" checked> 标记机器人编辑 (markbot)</label></div>
+    
+    <!-- [FEAT-02] RevisionDelete 修订版本删除选项 -->
+    <label class="cleanup-option"><input type="checkbox" id="do-revdel" checked> <b>修订版本删除 (RevisionDelete) 破坏者一切编辑</b></label>
+    <div class="sub-option" id="revdel-sub-options">
+        <div style="display:flex; flex-wrap:wrap; gap:14px; margin-top:2px;">
+            <label class="cleanup-option" style="color:var(--fd-text-secondary); margin-bottom:0;"><input type="checkbox" id="rd-hide-content" checked> 隐藏版本文字 (content)</label>
+            <label class="cleanup-option" style="color:var(--fd-text-secondary); margin-bottom:0;"><input type="checkbox" id="rd-hide-comment" checked> 隐藏编辑摘要 (comment)</label>
+            <label class="cleanup-option" style="color:var(--fd-text-secondary); margin-bottom:0;"><input type="checkbox" id="rd-hide-user" checked> 隐藏编者用户名 (user)</label>
+        </div>
+    </div>
+
+    <label class="cleanup-option" style="margin-top:8px;"><input type="checkbox" id="do-del-new" checked> <b>无条件删除新建页面</b></label>
+    <div class="sub-option"><label class="cleanup-option" style="color:var(--fd-text-secondary);"><input type="checkbox" id="del-sync-assoc"> 包含关联讨论页/主页</label></div>
 </div>
 <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:4px;">
     <button class="mw-ui-button" id="modal-btn-cancel">取消</button>
@@ -1042,33 +1062,61 @@ html.skin-theme-clientpref-night { ${darkVars} }
 </div>`;
 
         applyRevealToButtons(area);
-        document.getElementById('modal-overlay').style.display = 'flex';
-        document.getElementById('modal-btn-cancel').onclick = () => { document.getElementById('modal-overlay').style.display = 'none'; };
+        const overlay = document.getElementById('modal-overlay');
+        overlay.style.display = 'flex';
+        document.getElementById('modal-btn-cancel').onclick = () => { overlay.style.display = 'none'; };
+
+        const revDelCheck = document.getElementById('do-revdel');
+        const updateRevDelSubState = () => {
+            const disabled = !revDelCheck.checked;
+            ['rd-hide-content', 'rd-hide-comment', 'rd-hide-user'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) {
+                    el.disabled = disabled;
+                    el.parentElement.style.opacity = disabled ? '0.45' : '1';
+                }
+            });
+        };
+        revDelCheck.onchange = updateRevDelSubState;
 
         document.getElementById('btn-cleanup-confirm').onclick = async () => {
             if (State.isRunning) { mw.notify('有后台任务正在执行，请先彻底停止！', { type: 'error' }); return; }
 
             const users = document.getElementById('cleanup-users').value.split('\n')
-                .map(u => u.trim().replace(/^(?:User|用户|使用者|用戶):/i, ''))
+                .map(u => u.trim().replace(/^(?:User|User[ _]talk|用户|使用者|用戶|用戶討論|用户讨论):/i, '').trim())
                 .filter(u => u);
-            if (!users.length || !confirm(`确认启动针对 ${users.length} 个用户的防御清理？`)) return;
+            if (!users.length) { mw.notify('请先输入至少一个用户名或 IP', { type: 'warn' }); return; }
+            if (!confirm(`确认启动针对 ${users.length} 个用户的联合防御清理？`)) return;
 
-            let rawExp = document.getElementById('blk-expiry').value.trim().toLowerCase();
-            let expiry = (['infinite', 'infinity', 'forever', ''].includes(rawExp)) ? 'indefinite' : rawExp;
+            const optDoBlock     = document.getElementById('blk-enable').checked;
+            let rawExp           = document.getElementById('blk-expiry').value.trim().toLowerCase();
+            let expiry           = (['infinite', 'infinity', 'forever', ''].includes(rawExp)) ? 'indefinite' : rawExp;
 
-            const useBreaker    = document.getElementById('blk-circuit-breaker').checked;
-            const blockNoCreate = document.getElementById('blk-nocreate').checked;
-            const blockNoEmail  = document.getElementById('blk-noemail').checked;
-            const blockNoTalk   = document.getElementById('blk-notalk').checked;
+            const useBreaker     = document.getElementById('blk-circuit-breaker').checked;
+            const blockNoCreate  = document.getElementById('blk-nocreate').checked;
+            const blockNoEmail   = document.getElementById('blk-noemail').checked;
+            const blockNoTalk    = document.getElementById('blk-notalk').checked;
             const blockAutoBlock = document.getElementById('blk-autoblock').checked;
-            const optUndoMove   = document.getElementById('do-undo-move').checked;
-            const optRollback   = document.getElementById('do-rollback').checked;
-            const rbFlags       = document.getElementById('rb-markbot').checked ? { markbot: 1 } : {};
-            const optDelNew     = document.getElementById('do-del-new').checked;
-            const optDelSync    = document.getElementById('del-sync-assoc').checked;
-            const commonReason  = `联合处理：${getReason()}`;
+            const optUndoMove    = document.getElementById('do-undo-move').checked;
+            const optRollback    = document.getElementById('do-rollback').checked;
+            const rbFlags        = document.getElementById('rb-markbot').checked ? { markbot: 1 } : {};
 
-            document.getElementById('modal-overlay').style.display = 'none';
+            const optRevDel      = document.getElementById('do-revdel').checked;
+            const hideParts      = [];
+            if (document.getElementById('rd-hide-content').checked) hideParts.push('content');
+            if (document.getElementById('rd-hide-comment').checked) hideParts.push('comment');
+            if (document.getElementById('rd-hide-user').checked)    hideParts.push('user');
+
+            if (optRevDel && hideParts.length === 0) {
+                mw.notify('修订版本删除必须至少勾选一项隐藏内容（版本文字、编辑摘要或编者用户名）！', { type: 'error' });
+                return;
+            }
+
+            const optDelNew      = document.getElementById('do-del-new').checked;
+            const optDelSync     = document.getElementById('del-sync-assoc').checked;
+            const commonReason   = `联合处理：${getReason()}`;
+
+            overlay.style.display = 'none';
             document.getElementById('status-area').style.display = 'block';
             document.getElementById('btn-pause').style.display = 'inline-flex';
             document.getElementById('btn-stop').style.display  = 'inline-flex';
@@ -1082,94 +1130,205 @@ html.skin-theme-clientpref-night { ${darkVars} }
                 for (let uIdx = 0; uIdx < users.length; uIdx++) {
                     const user = users[uIdx];
                     if (State.stopSignal) break;
-                    uiProgress(Math.round(((uIdx) / users.length) * 100), `联防清理: ${user}`);
+                    const isIP = mw.util.isIPAddress(user, true);
+                    uiProgress(Math.round((uIdx / users.length) * 100), `联防清理: ${user}`);
                     uiLog(`[处理进程: ${user}]`, 'info');
 
                     while (State.isPaused) { await new Promise(r => setTimeout(r, 500)); if (State.stopSignal) break; }
                     if (State.stopSignal) break;
 
                     try {
-                        let blockOK = false;
-                        const bParams = { action: 'block', user, expiry, reason: commonReason, reblock: 1, nocreate: blockNoCreate, noemail: blockNoEmail, allowusertalk: !blockNoTalk };
-                        if (mw.util.isIPAddress(user, true)) delete bParams.autoblock; else bParams.autoblock = blockAutoBlock;
+                        // 1. 封禁阶段
+                        if (optDoBlock) {
+                            let blockOK = false;
+                            // [BUG-14] 对 IP 永久封禁自动转为 1 年，避免 invalidexpiry 触发熔断
+                            let actualExpiry = expiry;
+                            if (isIP && actualExpiry === 'indefinite') {
+                                actualExpiry = '1 year';
+                                uiLog(`[提示] 目标为 IP 用户，永久封禁自动转为 1 年期限`, 'warning');
+                            }
 
-                        try {
-                            await mwApiPostWithToken('csrf', bParams); blockOK = true; uiLog('封禁成功', 'success');
-                        } catch (e) {
-                            if (e.code === 'alreadyblocked') { blockOK = true; uiLog('用户已封禁', 'info'); }
-                            else {
-                                uiLog(`封禁失败: ${e.info || e.code}`, 'error');
-                                if (!useBreaker && confirm(`用户[${user}] 封禁失败。是否强制继续？`)) blockOK = true;
+                            const bParams = {
+                                action: 'block',
+                                user,
+                                expiry: actualExpiry,
+                                reason: commonReason,
+                                reblock: 1
+                            };
+                            if (blockNoCreate) bParams.nocreate = 1;
+                            if (!isIP && blockNoEmail) bParams.noemail = 1;
+                            if (!isIP && blockAutoBlock) bParams.autoblock = 1;
+                            if (!blockNoTalk) bParams.allowusertalk = 1;
+
+                            try {
+                                await mwApiPostWithToken('csrf', bParams);
+                                blockOK = true;
+                                uiLog('封禁成功', 'success');
+                            } catch (e) {
+                                if (e.code === 'alreadyblocked') {
+                                    blockOK = true;
+                                    uiLog('用户已封禁', 'info');
+                                } else {
+                                    uiLog(`封禁失败: ${e.info || e.code}`, 'error');
+                                    if (!useBreaker && confirm(`用户[${user}] 封禁失败。是否强制继续执行后续清理？`)) {
+                                        blockOK = true;
+                                    }
+                                }
+                            }
+
+                            if (!blockOK) {
+                                uiLog(`用户 [${user}] 封禁未成功，触发熔断跳过后续`, 'warning');
+                                continue;
                             }
                         }
 
-                        if (!blockOK) continue;
                         if (State.stopSignal) break;
                         while (State.isPaused) { await new Promise(r => setTimeout(r, 500)); if (State.stopSignal) break; }
+                        if (State.stopSignal) break;
 
-                        const contribs = await apiQueryAll({ list: 'usercontribs', ucuser: user, uclimit: 'max' }, i => i);
-
-                        if (optUndoMove && !State.stopSignal) {
+                        // 2. 还原更名 (Undo Move)
+                        if (optUndoMove) {
                             const moves = await apiQueryAll({ list: 'logevents', letype: 'move', leuser: user, lelimit: 'max' }, i => i);
                             await executeBatch(moves, async (m) => {
                                 if (!m.params || !m.params.target_title) {
                                     throw { code: 'hiddenlog', info: '目标日志内容已被系统隐藏' };
                                 }
                                 try {
-                                    await mwApiPostWithToken('csrf', Object.assign({ action: 'move', from: m.params.target_title, to: m.title, noredirect: true, movetalk: true, reason: '还原更名' }, getBotParam('edit')));
+                                    await mwApiPostWithToken('csrf', Object.assign({
+                                        action: 'move',
+                                        from: m.params.target_title,
+                                        to: m.title,
+                                        noredirect: true,
+                                        movetalk: true,
+                                        reason: '联合处理：还原更名'
+                                    }, getBotParam('edit')));
                                 } catch (e) {
                                     if (!['articleexists', 'cantmove', 'protectedpage', 'missingtitle', 'selfmove', 'hiddenlog'].includes(e.code)) throw e;
                                 }
-                            }, `还原移动 ${user}`, false, false, true);
+                            }, `还原移动 ${user}`, false, false, false);
                         }
-
                         if (State.stopSignal) break;
 
-                        if (optRollback && !State.stopSignal) {
+                        // 3. 拉取贡献 [BUG-13] 必须在更名还原后拉取贡献
+                        let contribs = [];
+                        if (optRollback || optDelNew || optRevDel) {
+                            contribs = await apiQueryAll({
+                                list: 'usercontribs',
+                                ucuser: user,
+                                uclimit: 'max',
+                                ucprop: 'ids|title|timestamp|comment|size|flags'
+                            }, i => i);
+                            uiLog(`获取到 ${contribs.length} 条贡献记录`, 'info');
+                        }
+                        if (State.stopSignal) break;
+
+                        // 4. 回退编辑 (Rollback) [BUG-11] 使用 rollback Token
+                        if (optRollback && contribs.length) {
                             const titles = [...new Set(contribs.map(i => i.title))];
                             await executeBatch(titles, async (t) => {
-                                try { await mwApiPostWithToken('csrf', Object.assign({ action: 'rollback', title: t, user, summary: '回退贡献' }, rbFlags));
-                                } catch (e) { if (!['rollbackfail', 'alreadyrolled', 'onlyauthor'].includes(e.code)) throw e; }
-                            }, `回退编辑 ${user}`, false, false, true);
+                                try {
+                                    await mwApiPostWithToken('rollback', Object.assign({
+                                        action: 'rollback',
+                                        title: t,
+                                        user,
+                                        summary: '联合处理：回退贡献'
+                                    }, rbFlags));
+                                } catch (e) {
+                                    if (!['rollbackfail', 'alreadyrolled', 'onlyauthor', 'cantrollback', 'notanarticle'].includes(e.code)) throw e;
+                                }
+                            }, `回退编辑 ${user}`, false, false, false);
                         }
-
                         if (State.stopSignal) break;
 
-                        if (optDelNew && !State.stopSignal) {
-                            const newPages = contribs.filter(i => i.new !== undefined).map(i => i.title);
-                            if (newPages.length) {
-                                const finalDel = [];
-                                for (let i = 0; i < newPages.length; i += 50) {
-                                    if (State.stopSignal) break;
-                                    const chunk = newPages.slice(i, i + 50);
-                                    try {
-                                        const res = await mwApiPost({ action: 'query', titles: chunk.join('|'), prop: 'revisions', rvprop: 'user', rvlimit: 1, rvdir: 'newer' });
-                                        if (!res?.query?.pages) continue;
-                                        Object.values(res.query.pages).forEach(p => {
-                                            if (p.revisions?.[0]?.user === user) {
-                                                finalDel.push(p.title);
-                                                if (optDelSync) {
-                                                    const tObj = mw.Title.newFromText(p.title);
-                                                    if (tObj) {
-                                                        const assocPage = tObj.isTalkPage() ? tObj.getSubjectPage() : tObj.getTalkPage();
-                                                        if (assocPage) finalDel.push(assocPage.getPrefixedText());
-                                                    }
-                                                }
-                                            }
-                                        });
-                                    } catch (e) { console.warn(`[Batch Tool] Deep Cleanup 批处理查询异常:`, e); }
-                                }
-                                if (!State.stopSignal) {
-                                    await executeBatch([...new Set(finalDel)], async (t) => await mwApiPostWithToken('csrf', Object.assign({ action: 'delete', title: t, reason: '联合处理：无条件清理页面' }, getBotParam('edit'))), `删除项 ${user}`, false, false, true);
+                        // 5. [FEAT-02] 修订版本删除 (RevisionDelete) 破坏者一切编辑
+                        if (optRevDel && contribs.length) {
+                            const pageRevMap = new Map();
+                            for (const c of contribs) {
+                                if (!c.revid || !c.title) continue;
+                                if (!pageRevMap.has(c.title)) pageRevMap.set(c.title, []);
+                                pageRevMap.get(c.title).push(c.revid);
+                            }
+
+                            const revDelTasks = [];
+                            for (const [title, revIds] of pageRevMap.entries()) {
+                                const uniqueIds = [...new Set(revIds)];
+                                for (let i = 0; i < uniqueIds.length; i += 50) {
+                                    const chunk = uniqueIds.slice(i, i + 50);
+                                    revDelTasks.push({
+                                        title: `${title} (${chunk.length} 个版本)`,
+                                        pageTitle: title,
+                                        ids: chunk
+                                    });
                                 }
                             }
+
+                            if (revDelTasks.length > 0) {
+                                uiLog(`[${user}] 待版本删除任务：${revDelTasks.length} 个`, 'info');
+                                await executeBatch(revDelTasks, async (task) => {
+                                    const res = await mwApiPostWithToken('csrf', {
+                                        action: 'revisiondelete',
+                                        type: 'revision',
+                                        target: task.pageTitle,
+                                        ids: task.ids.join('|'),
+                                        hide: hideParts.join('|'),
+                                        reason: commonReason
+                                    });
+                                    if (res?.revisiondelete?.status === 'Fail') {
+                                        const errMsg = res.revisiondelete.errors?.[0]?.message || '版本删除失败';
+                                        throw { code: 'revdelfail', info: errMsg };
+                                    }
+                                }, `版本删除 ${user}`, false, false, false);
+                            }
+                        }
+                        if (State.stopSignal) break;
+
+                        // 6. 删除新建页面 [BUG-12] 逐页严格核查创建者
+                        if (optDelNew && contribs.length) {
+                            const newPages = [...new Set(contribs.filter(i => i.new !== undefined && i.new !== false).map(i => i.title))];
+                            uiLog(`待核验的新建页面：${newPages.length} 个`, 'info');
+                            await executeBatch(newPages, async (t) => {
+                                const creator = await getPageCreator(t);
+                                if (creator === false) throw { code: 'missingtitle', info: '页面已不存在' };
+                                if (creator === null)  throw { code: 'skipped', info: '无法确认创建者，已跳过' };
+                                if (!isSameUser(creator, user)) throw { code: 'skipped', info: `创建者是 ${creator}，非目标用户，已跳过` };
+
+                                // [BUG-17] 补充 getBotParam('edit')
+                                await mwApiPostWithToken('csrf', Object.assign({
+                                    action: 'delete',
+                                    title: t,
+                                    reason: '联合处理：无条件清理页面'
+                                }, getBotParam('edit')));
+
+                                if (optDelSync) {
+                                    const tObj = mw.Title.newFromText(t);
+                                    const assoc = tObj && (tObj.isTalkPage() ? tObj.getSubjectPage() : tObj.getTalkPage());
+                                    if (assoc) {
+                                        const at = assoc.getPrefixedText();
+                                        try {
+                                            await mwApiPostWithToken('csrf', Object.assign({
+                                                action: 'delete',
+                                                title: at,
+                                                reason: '联合处理：无条件清理页面（关联页）'
+                                            }, getBotParam('edit')));
+                                            uiLog(`${at} (关联页已删除)`, 'success');
+                                        } catch (e) {
+                                            if (e.code !== 'missingtitle') uiLog(`${at} (关联页删除失败: ${e.info || e.code})`, 'error');
+                                        }
+                                    }
+                                }
+                            }, `删除项 ${user}`, false, false, false);
                         }
                     } catch (userErr) {
-                        uiLog(`用户 ${user} 深度处理时发生异常跳过: ${userErr.info || userErr.code || '未知'}`, 'error');
+                        uiLog(`用户 ${user} 深度处理时发生异常跳过: ${userErr.info || userErr.code || userErr.message || '未知'}`, 'error');
                     }
                 }
-                if (!State.stopSignal) { uiProgress(100, `联合清理防御完成`); mw.notify('任务圆满结束'); }
-                else { mw.notify('任务已手动停止', { type: 'warn' }); }
+
+                if (!State.stopSignal) {
+                    uiProgress(100, `联合清理防御完成`);
+                    mw.notify('任务圆满结束');
+                } else {
+                    mw.notify('任务已手动停止', { type: 'warn' });
+                }
             } finally {
                 document.getElementById('btn-pause').style.display = 'none';
                 document.getElementById('btn-stop').style.display  = 'none';
@@ -1178,7 +1337,6 @@ html.skin-theme-clientpref-night { ${darkVars} }
         };
     }
 
-    // [BUG-04][BUG-08] 修复：移除死参数 managedExternally；ucnamespace 改为显式条件赋值
     async function smartImport(listType, params) {
         if (State.isRunning) { mw.notify('请先停止当前运行的任务', { type: 'error' }); return []; }
         const nsSelect = document.getElementById('import-ns-select').value;
@@ -1195,7 +1353,6 @@ html.skin-theme-clientpref-night { ${darkVars} }
                 for (let i = 0; i < users.length; i++) {
                     if (State.stopSignal) break;
                     uiProgress(0, `正在抓取记录: ${users[i]}`);
-                    // [BUG-08] 显式条件赋值，避免传入 undefined
                     const queryParams = { list: 'usercontribs', uclimit: 'max', ucuser: users[i] };
                     if (nsSelect !== 'ALL') queryParams.ucnamespace = nsSelect;
                     const chunk = await apiQueryAll(queryParams, i => i.title);
@@ -1213,7 +1370,6 @@ html.skin-theme-clientpref-night { ${darkVars} }
                 else if (listType === 'backlinks') p.bllimit = 'max';
                 else p.limit = 'max';
 
-                // [BUG-08] 显式条件赋值
                 if (nsSelect !== 'ALL') {
                     const k = { categorymembers: 'cmnamespace', backlinks: 'blnamespace', recentchanges: 'rcnamespace' }[listType];
                     if (k) p[k] = nsSelect;
@@ -1244,7 +1400,6 @@ html.skin-theme-clientpref-night { ${darkVars} }
         try { await executeBatch(items, actionFunc, task, true, true); } finally { setTaskState(false); }
     }
 
-    // [BUG-03] 修复：限速重试等待期间使用 sleepWithStop，可被停止信号中断
     async function executeBatch(items, actionFunc, task, clearLog = true, resetStop = true, disableProgressUI = false) {
         const parsedRate = parseFloat(document.getElementById('process-rate').value);
         const rate = isNaN(parsedRate) ? 1.0 : Math.max(0, parsedRate);
@@ -1292,14 +1447,15 @@ html.skin-theme-clientpref-night { ${darkVars} }
                                 }
                             }
                             uiLog(`频率受限，等待 ${waitTime / 1000}s 重试 (${retry}/3)...`, 'warning');
-                            await sleepWithStop(waitTime); // [BUG-03] 可中断等待
+                            await sleepWithStop(waitTime);
                             if (State.stopSignal) throw { code: 'stopped', info: '任务已停止' };
                         } else throw e;
                     }
                 }
             } catch (e) {
-                if (e.code === 'stopped') { /* 优雅停止，不记录错误 */ }
+                if (e.code === 'stopped') { /* 优雅停止 */ }
                 else if (e.code === 'missingtitle') uiLog(`${itemName} (无需处理，页面不存在)`, 'info');
+                else if (e.code === 'skipped') uiLog(`${itemName} (${e.info})`, 'warning');
                 else uiLog(`${itemName} (${e.info || e.code || '未知错误'})`, 'error');
             }
 
@@ -1357,10 +1513,14 @@ html.skin-theme-clientpref-night { ${darkVars} }
                     if (m) passedIdleCheck.push(p.title);
                 });
 
+                // [BUG-16] 修复创建者筛选：采用逐页严格查询，杜绝 rvdir 多页报错
                 if (creator && passedIdleCheck.length > 0) {
-                    const resCreator = await mwApiPost({ action: 'query', titles: passedIdleCheck.join('|'), prop: 'revisions', rvprop: 'user', rvdir: 'newer', rvlimit: 1 });
-                    if (resCreator?.query?.pages) {
-                        Object.values(resCreator.query.pages).forEach(p => { if (p.revisions?.[0]?.user?.toLowerCase() === creator) filtered.push(p.title); });
+                    for (const t of passedIdleCheck) {
+                        if (State.stopSignal) break;
+                        const pageCreator = await getPageCreator(t);
+                        if (pageCreator && isSameUser(pageCreator, creator)) {
+                            filtered.push(t);
+                        }
                     }
                 } else filtered.push(...passedIdleCheck);
 
@@ -1385,17 +1545,12 @@ html.skin-theme-clientpref-night { ${darkVars} }
         mw.notify(`已新增 ${ts.length} 条数据`);
     }
 
-    // [BUG-07] 修复：
-    //   1. 点击遮罩层可关闭弹窗
-    //   2. 防止多次调用导致监听器堆叠（通过 _promptCloseHandler 追踪并清除旧监听器）
     function customPrompt(title, label, callback, isTextArea) {
         const area = document.getElementById('modal-content-area');
         area.innerHTML = `<div style="font-weight:700; font-size:15px; color:var(--fd-text-primary); margin-bottom:14px; padding-bottom:12px; border-bottom:1px solid var(--fd-border-light);">${escapeHTML(title)}</div><label class="filter-label">${escapeHTML(label)}</label>${isTextArea ? `<textarea id="modal-input-val" class="tool-textarea" style="height:120px; font-family:monospace;"></textarea>` : `<input type="text" id="modal-input-val" class="tool-input">`}<div style="display:flex; gap:10px; justify-content:flex-end; margin-top:12px;"><button class="mw-ui-button" id="modal-cancel">取消</button><button class="mw-ui-button mw-ui-progressive" id="modal-ok">确定</button></div>`;
         applyRevealToButtons(area);
 
         const overlay = document.getElementById('modal-overlay');
-
-        // 清除上一次遗留的遮罩层监听器，防止堆叠
         if (overlay._promptCloseHandler) {
             overlay.removeEventListener('click', overlay._promptCloseHandler);
             overlay._promptCloseHandler = null;
@@ -1416,7 +1571,6 @@ html.skin-theme-clientpref-night { ${darkVars} }
             }
         };
 
-        // [BUG-07] 点击遮罩层关闭
         const overlayClose = (e) => { if (e.target === overlay) closeModal(); };
         overlay._promptCloseHandler = overlayClose;
         overlay.addEventListener('click', overlayClose);
